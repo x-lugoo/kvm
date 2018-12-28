@@ -1,7 +1,7 @@
 
 .PHONY: run
 
-kvm: kvm.o payload.o
+kvm: kvm.o libkvm.o payload.o
 	$(CC) $^ -o $@
 
 payload.o: payload.ld guest16.o

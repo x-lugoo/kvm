@@ -8,16 +8,7 @@
 #include <sys/ioctl.h>
 #include <string.h>
 
-struct vm {
-	int sys_fd;
-	int fd;
-	char *mem;
-};
-
-struct vcpu {
-	int fd;
-	struct kvm_run *kvm_run;
-};
+#include "kvm.h"
 
 void vm_init(struct vm *vm , size_t mem_size)
 {
@@ -101,6 +92,14 @@ void vcpu_init(struct vm *vm, struct vcpu *vcpu)
 	}
 }
 
+#define READ_REGS()				 \
+	do{					\
+		if (ioctl(vcpu->fd, KVM_GET_REGS, &regs) < 0) { \
+			perror("KVM_GET_REGS");   		\
+			exit(1);    				\
+		}                     				\
+	}while(0);              				
+
 int run_vm(struct vm *vm, struct vcpu *vcpu, size_t sz)
 {
 	struct kvm_regs regs;
@@ -114,30 +113,53 @@ int run_vm(struct vm *vm, struct vcpu *vcpu, size_t sz)
 
 		switch (vcpu->kvm_run->exit_reason) {
 		case KVM_EXIT_HLT:
+			printf("KVM_EXIT_HLT(%d)\n", KVM_EXIT_HLT);
+			kvm_show_regs(vcpu);
 			goto check;
+
 		case KVM_EXIT_IO:
 			if(vcpu->kvm_run->io.direction == KVM_EXIT_IO_OUT &&
 					vcpu->kvm_run->io.size == 1 &&
 					vcpu->kvm_run->io.port == 0x3f8 &&
 					vcpu->kvm_run->io.count == 1)
-				printf("KVM_EXIT_IO IO output: %c \n", *(((char*)vcpu->kvm_run) + vcpu->kvm_run->io.data_offset));
+				printf("KVM_EXIT_IO IO output: %c \n", 
+					*(((char*)vcpu->kvm_run) + vcpu->kvm_run->io.data_offset));
+			//kvm_show_regs(vcpu);
 			break;
 
-		default:
-			fprintf(stderr,"Got exit reason %d,"
-				"expected KVM_EXIT_HLT (%d)\n",
-				vcpu->kvm_run->exit_reason, KVM_EXIT_HLT);
+		case KVM_EXIT_MMIO:
+			printf("KVM_EXIT_MMIO(%d)\n", KVM_EXIT_MMIO);
+			kvm_show_regs(vcpu);
+			break;
+
+		case KVM_EXIT_INTR:
+			printf("KVM_EXIT_INTR(%d)\n", KVM_EXIT_INTR);
+			kvm_show_regs(vcpu);
+			break;
+
+		case KVM_EXIT_INTERNAL_ERROR:
+			printf("KVM_EXIT_INTERNAL_ERROR(%d)  0x%x\n",
+				    KVM_EXIT_INTERNAL_ERROR, vcpu->kvm_run->internal.suberror);
+			kvm_show_regs(vcpu);
 			exit(1);
+
+		case KVM_EXIT_FAIL_ENTRY:
+			printf("KVM_EXIT_FAIL_ENTRY(%d) hardware_entry_failure_reason 0x%llx\n",
+				    KVM_EXIT_FAIL_ENTRY, 
+				    (unsigned long long )vcpu->kvm_run->fail_entry.hardware_entry_failure_reason);
+			kvm_show_regs(vcpu);
+			exit(1);
+
+		default:
+			fprintf(stderr,"Got exit reason %d\n", vcpu->kvm_run->exit_reason);
+			kvm_show_regs(vcpu);
+			break;
 		}
 	}
 	return 0;
 
 check:
-	if (ioctl(vcpu->fd, KVM_GET_REGS, &regs) < 0) {
-		perror("KVM_GET_REGS");
-		exit(1);
-	}
-	
+	READ_REGS();	
 	if (regs.rax != 99) {
 		printf("wrong result: AX is %lld\n", regs.rax);
 		return 1;
@@ -149,6 +171,7 @@ check:
 			(unsigned long long)memval);
 		return 1;
 	}
+	kvm_show_regs(vcpu);
 
 	printf("The right AX is %lld memval is %lld\n", regs.rax, (unsigned long long )memval);
 				

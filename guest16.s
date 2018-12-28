@@ -19,7 +19,11 @@ guest16:
     	out %al, (%dx)
 
 	movw $99, %ax
-	movw %ax, 0x502
-
+	movw %ax, 0x1502
 	hlt
 
+
+msgstr:
+	.asciz "welcome to jeff"
+len:
+	.int .- msgstr
