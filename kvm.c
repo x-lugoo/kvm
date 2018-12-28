@@ -65,7 +65,7 @@ void vm_init(struct vm *vm , size_t mem_size)
 
 	memreg.slot = 0;
 	memreg.flags = 0;
-	memreg.guest_phys_addr = 0;
+	memreg.guest_phys_addr = 0x1000;
 	memreg.memory_size = mem_size;
 	memreg.userspace_addr = (unsigned long)vm->mem;
 	if (ioctl(vm->fd, KVM_SET_USER_MEMORY_REGION, &memreg) < 0) {
@@ -92,6 +92,7 @@ void vcpu_init(struct vm *vm, struct vcpu *vcpu)
                 exit(1);
 	}
 
+	/*get to data from kernel about struct kvm_run with much status messages about vcpu*/
 	vcpu->kvm_run = mmap(NULL, vcpu_mmap_size, PROT_READ | PROT_WRITE,
 			     MAP_SHARED, vcpu->fd, 0);
 	if (vcpu->kvm_run == MAP_FAILED) {
@@ -105,19 +106,29 @@ int run_vm(struct vm *vm, struct vcpu *vcpu, size_t sz)
 	struct kvm_regs regs;
 	u_int64_t memval = 0;
 	
-	if (ioctl(vcpu->fd, KVM_RUN, 0) < 0) {
-		perror("KVM_RUN");
-		exit(1);
-	}
+	for (;;) {
+		if (ioctl(vcpu->fd, KVM_RUN, 0) < 0) {
+			perror("KVM_RUN");
+			exit(1);
+		}
 
-	switch (vcpu->kvm_run->exit_reason) {
-	case KVM_EXIT_HLT:
-		goto check;
-	default:
-		fprintf(stderr,"Got exit reason %d,"
-			"expected KVM_EXIT_HLT (%d)\n",
-			vcpu->kvm_run->exit_reason, KVM_EXIT_HLT);
-		exit(1);
+		switch (vcpu->kvm_run->exit_reason) {
+		case KVM_EXIT_HLT:
+			goto check;
+		case KVM_EXIT_IO:
+			if(vcpu->kvm_run->io.direction == KVM_EXIT_IO_OUT &&
+					vcpu->kvm_run->io.size == 1 &&
+					vcpu->kvm_run->io.port == 0x3f8 &&
+					vcpu->kvm_run->io.count == 1)
+				printf("KVM_EXIT_IO IO output: %c \n", *(((char*)vcpu->kvm_run) + vcpu->kvm_run->io.data_offset));
+			break;
+
+		default:
+			fprintf(stderr,"Got exit reason %d,"
+				"expected KVM_EXIT_HLT (%d)\n",
+				vcpu->kvm_run->exit_reason, KVM_EXIT_HLT);
+			exit(1);
+		}
 	}
 	return 0;
 
@@ -159,7 +170,7 @@ int run_real_mode(struct vm *vm, struct vcpu *vcpu)
 		exit(1);
 	}
 
-	sregs.cs.selector = 0;
+	sregs.cs.selector = 0; /*default to select describe table index 0*/
 	sregs.cs.base = 0;
 
 	if (ioctl(vcpu->fd, KVM_SET_SREGS, &sregs) < 0) {
@@ -168,8 +179,10 @@ int run_real_mode(struct vm *vm, struct vcpu *vcpu)
 	}
 
 	memset(&regs, 0, sizeof(regs));
-	regs.rflags = 2;
-	regs.rip = 0;
+	regs.rflags = 2; /*for kvm .must set*/
+	regs.rip = 0x1000;    /*cs:ip = 0x1000 .The first page for interrupt describe table(0x0-0x1000) */
+	regs.rax = 4;    /*for ax + bx to verify the result(9)*/
+	regs.rbx = 5;
 
 	if (ioctl(vcpu->fd, KVM_SET_REGS, &regs) < 0) {
 		perror("KVM_SET_REGS");
