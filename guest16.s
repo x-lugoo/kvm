@@ -18,12 +18,10 @@ guest16:
     	mov $'f', %al
     	out %al, (%dx)
 
+	in (%dx), %al   #input 'X'
+    	out %al, (%dx)
+
 	movw $99, %ax
 	movw %ax, 0x1502
 	hlt
 
-
-msgstr:
-	.asciz "welcome to jeff"
-len:
-	.int .- msgstr

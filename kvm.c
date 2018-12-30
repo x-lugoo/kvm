@@ -124,6 +124,12 @@ int run_vm(struct vm *vm, struct vcpu *vcpu, size_t sz)
 					vcpu->kvm_run->io.count == 1)
 				printf("KVM_EXIT_IO IO output: %c \n", 
 					*(((char*)vcpu->kvm_run) + vcpu->kvm_run->io.data_offset));
+			else if (vcpu->kvm_run->io.direction == KVM_EXIT_IO_IN &&
+					vcpu->kvm_run->io.size == 1 &&
+					vcpu->kvm_run->io.port == 0x3f8 &&
+					vcpu->kvm_run->io.count == 1)
+				((char*)vcpu->kvm_run + vcpu->kvm_run->io.data_offset)[0] = 'X';
+		
 			//kvm_show_regs(vcpu);
 			break;
 
