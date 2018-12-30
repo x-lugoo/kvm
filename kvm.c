@@ -56,7 +56,7 @@ void vm_init(struct vm *vm , size_t mem_size)
 
 	memreg.slot = 0;
 	memreg.flags = 0;
-	memreg.guest_phys_addr = 0x1000;
+	memreg.guest_phys_addr = 0x0;
 	memreg.memory_size = mem_size;
 	memreg.userspace_addr = (unsigned long)vm->mem;
 	if (ioctl(vm->fd, KVM_SET_USER_MEMORY_REGION, &memreg) < 0) {
@@ -193,8 +193,11 @@ int run_real_mode(struct vm *vm, struct vcpu *vcpu)
 		exit(1);
 	}
 
-	sregs.cs.selector = 0; /*default to select describe table index 0*/
-	sregs.cs.base = 0;
+	sregs.cs.selector = 0x1000; 
+	/*
+	 *KVM on Intel requires 'base' to be 'selector * 16' in real mode - by jeff
+	 */
+	sregs.cs.base = sregs.cs.selector << 4;
 
 	if (ioctl(vcpu->fd, KVM_SET_SREGS, &sregs) < 0) {
 		perror("KVM_SET_SREGS");
@@ -203,7 +206,7 @@ int run_real_mode(struct vm *vm, struct vcpu *vcpu)
 
 	memset(&regs, 0, sizeof(regs));
 	regs.rflags = 2; /*for kvm .must set*/
-	regs.rip = 0x1000;    /*cs:ip = 0x1000 .The first page for interrupt describe table(0x0-0x1000) */
+	regs.rip = 0x200;    
 	regs.rax = 4;    /*for ax + bx to verify the result(9)*/
 	regs.rbx = 5;
 
@@ -212,7 +215,7 @@ int run_real_mode(struct vm *vm, struct vcpu *vcpu)
 		exit(1);
 	}
 
-	memcpy(vm->mem, guest16_start, guest16_end-guest16_start);
+	memcpy(vm->mem + (0x1000 << 4) + 0x200, guest16_start, guest16_end-guest16_start);
 	return run_vm(vm, vcpu, 2);
 }
 
