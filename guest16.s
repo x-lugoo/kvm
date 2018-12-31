@@ -18,7 +18,10 @@ guest16:
     	mov $'f', %al
     	out %al, (%dx)
 
-	in (%dx), %al   #input 'X'
+	in (%dx), %al   #input 'G'
+    	out %al, (%dx)
+
+	in (%dx), %al   #input 'G'
     	out %al, (%dx)
 
 	movw $99, %ax

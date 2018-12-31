@@ -9,8 +9,9 @@
 #include <string.h>
 
 #include "kvm.h"
+#include "early_printk.h"
 
-void vm_init(struct vm *vm , size_t mem_size)
+void vm_init(struct kvm *vm , size_t mem_size)
 {
 	int api_ver;
 	struct kvm_userspace_memory_region memreg;
@@ -26,7 +27,6 @@ void vm_init(struct vm *vm , size_t mem_size)
 		perror("KVM_GET_API_VERSION");
 		exit(1);
 	}
-	printf("Get api version %d KVM_API_VERSION %d \n",api_ver,KVM_API_VERSION);
 	
 	if (api_ver != KVM_API_VERSION) {
 		fprintf(stderr , "Got KVM api version %d, expected %d\n",
@@ -67,7 +67,7 @@ void vm_init(struct vm *vm , size_t mem_size)
 
 
 
-void vcpu_init(struct vm *vm, struct vcpu *vcpu)
+void vcpu_init(struct kvm *vm, struct vcpu *vcpu)
 {
 	int vcpu_mmap_size;
 
@@ -100,10 +100,11 @@ void vcpu_init(struct vm *vm, struct vcpu *vcpu)
 		}                     				\
 	}while(0);              				
 
-int run_vm(struct vm *vm, struct vcpu *vcpu, size_t sz)
+int run_vm(struct kvm *vm, struct vcpu *vcpu, size_t sz)
 {
 	struct kvm_regs regs;
 	u_int64_t memval = 0;
+	bool ret;
 	
 	for (;;) {
 		if (ioctl(vcpu->fd, KVM_RUN, 0) < 0) {
@@ -113,11 +114,18 @@ int run_vm(struct vm *vm, struct vcpu *vcpu, size_t sz)
 
 		switch (vcpu->kvm_run->exit_reason) {
 		case KVM_EXIT_HLT:
-			printf("KVM_EXIT_HLT(%d)\n", KVM_EXIT_HLT);
+			printf("\nKVM_EXIT_HLT(%d)\n", KVM_EXIT_HLT);
 			kvm_show_regs(vcpu);
 			goto check;
 
 		case KVM_EXIT_IO:
+			ret = kvm__emulate_io((void*)vcpu,
+					vcpu->kvm_run->io.port,
+					(uint8_t*)vcpu->kvm_run + vcpu->kvm_run->io.data_offset,
+					vcpu->kvm_run->io.direction,
+					vcpu->kvm_run->io.size,
+					vcpu->kvm_run->io.count);
+			/**
 			if(vcpu->kvm_run->io.direction == KVM_EXIT_IO_OUT &&
 					vcpu->kvm_run->io.size == 1 &&
 					vcpu->kvm_run->io.port == 0x3f8 &&
@@ -130,7 +138,10 @@ int run_vm(struct vm *vm, struct vcpu *vcpu, size_t sz)
 					vcpu->kvm_run->io.count == 1)
 				((char*)vcpu->kvm_run + vcpu->kvm_run->io.data_offset)[0] = 'X';
 		
+				**/
 			//kvm_show_regs(vcpu);
+			if (!ret)
+				goto fail_exit;
 			break;
 
 		case KVM_EXIT_MMIO:
@@ -181,18 +192,20 @@ check:
 
 	printf("The right AX is %lld memval is %lld\n", regs.rax, (unsigned long long )memval);
 				
-
 	return 0;
+	
+fail_exit:
+	kvm_show_regs(vcpu);
+	return 1;
 }
 
 extern const unsigned char guest16_start[],guest16_end[];
 
-int run_real_mode(struct vm *vm, struct vcpu *vcpu)
+int run_real_mode(struct kvm *vm, struct vcpu *vcpu)
 {
 	struct kvm_sregs sregs;
 	struct kvm_regs regs;
 
-	printf("testing real mode\n");
 
 	if (ioctl(vcpu->fd, KVM_GET_SREGS, &sregs) < 0) {
 		perror("KVM_GET_SREGS");
@@ -213,8 +226,8 @@ int run_real_mode(struct vm *vm, struct vcpu *vcpu)
 	memset(&regs, 0, sizeof(regs));
 	regs.rflags = 2; /*for kvm .must set*/
 	regs.rip = 0x200;    
-	regs.rax = 4;    /*for ax + bx to verify the result(9)*/
-	regs.rbx = 5;
+	regs.rax = 0;    /*for ax + bx to verify the result(1)*/
+	regs.rbx = 1;
 
 	if (ioctl(vcpu->fd, KVM_SET_REGS, &regs) < 0) {
 		perror("KVM_SET_REGS");
@@ -227,12 +240,13 @@ int run_real_mode(struct vm *vm, struct vcpu *vcpu)
 
 int main(void)
 {
-	struct vm vm;
+	struct kvm kvm;
 	struct vcpu vcpu;
 
-	vm_init(&vm, 0x200000);
-	vcpu_init(&vm, &vcpu);
-	run_real_mode(&vm, &vcpu);
+	vm_init(&kvm, 0x200000);
+	vcpu_init(&kvm, &vcpu);
+	early_printk__init();
+	run_real_mode(&kvm, &vcpu);
 
 	return 0;
 }
