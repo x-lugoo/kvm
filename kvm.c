@@ -119,26 +119,12 @@ int run_vm(struct kvm *vm, struct vcpu *vcpu, size_t sz)
 			goto check;
 
 		case KVM_EXIT_IO:
-			ret = kvm__emulate_io((void*)vcpu,
+			ret = kvm__emulate_io(vm,
 					vcpu->kvm_run->io.port,
 					(uint8_t*)vcpu->kvm_run + vcpu->kvm_run->io.data_offset,
 					vcpu->kvm_run->io.direction,
 					vcpu->kvm_run->io.size,
 					vcpu->kvm_run->io.count);
-			/**
-			if(vcpu->kvm_run->io.direction == KVM_EXIT_IO_OUT &&
-					vcpu->kvm_run->io.size == 1 &&
-					vcpu->kvm_run->io.port == 0x3f8 &&
-					vcpu->kvm_run->io.count == 1)
-				printf("KVM_EXIT_IO IO output: %c \n", 
-					*(((char*)vcpu->kvm_run) + vcpu->kvm_run->io.data_offset));
-			else if (vcpu->kvm_run->io.direction == KVM_EXIT_IO_IN &&
-					vcpu->kvm_run->io.size == 1 &&
-					vcpu->kvm_run->io.port == 0x3f8 &&
-					vcpu->kvm_run->io.count == 1)
-				((char*)vcpu->kvm_run + vcpu->kvm_run->io.data_offset)[0] = 'X';
-		
-				**/
 			//kvm_show_regs(vcpu);
 			if (!ret)
 				goto fail_exit;
@@ -241,12 +227,11 @@ int run_real_mode(struct kvm *vm, struct vcpu *vcpu)
 int main(void)
 {
 	struct kvm kvm;
-	struct vcpu vcpu;
 
 	vm_init(&kvm, 0x200000);
-	vcpu_init(&kvm, &vcpu);
+	vcpu_init(&kvm, &kvm.vcpu);
 	early_printk__init();
-	run_real_mode(&kvm, &vcpu);
+	run_real_mode(&kvm, &kvm.vcpu);
 
 	return 0;
 }
