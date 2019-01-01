@@ -11,10 +11,40 @@
 #include "kvm.h"
 #include "early_printk.h"
 
+static void usage(char *argv[])
+{
+	fprintf(stderr, " usage: %s [--kernel=]<kernel-image-path>\n" \
+			"        or %s ./kernel-image-path\n" \
+			"        or %s --test \n"            \
+			"notice: you can use %s ./tests/pit/tick.bin to test\n",
+			argv[0], argv[0], argv[0], argv[0]);
+	exit(1);
+}
+
+static inline uint32_t segment_to_flat(uint16_t selector, uint16_t offset)
+{
+	return ((uint32_t)selector << 4) + (uint32_t)offset;
+}
+
+static inline void *guest_flat_to_host(struct kvm *self, unsigned long offset)
+{
+	return self->mem + offset;
+}
+
+static inline void *guest_real_to_host(struct kvm *self, uint16_t selector, uint16_t offset)
+{
+	unsigned long flat = segment_to_flat(selector, offset);
+
+	return guest_flat_to_host(self, flat);
+}
+
+
+
 void vm_init(struct kvm *vm , size_t mem_size)
 {
 	int api_ver;
 	struct kvm_userspace_memory_region memreg;
+	struct kvm_pit_config pit_config = { .flags = 0, };
 
 	vm->sys_fd = open("/dev/kvm", O_RDWR);
 	if (vm->sys_fd < 0) {
@@ -40,10 +70,21 @@ void vm_init(struct kvm *vm , size_t mem_size)
 		exit(1);
 	}
 
-	if (ioctl(vm->fd, KVM_SET_TSS_ADDR, 0xfffdd000) < 0) {
+	if (ioctl(vm->fd, KVM_SET_TSS_ADDR, 0xfffbd000) < 0) {
 		perror("KVM_SET_TSS_ADDR");
 		exit(1);
 	}
+
+	if (ioctl(vm->fd, KVM_CREATE_IRQCHIP) < 0) {
+		perror("KVM_CREATE_IRQCHIP ioctl");
+		exit(1);
+	}
+
+	if (ioctl(vm->fd, KVM_CREATE_PIT2, &pit_config) < 0) {
+		perror("KVM_CREATE_PIT2 ioctl");
+		exit(1);
+	}
+
 
 	vm->mem = mmap(NULL, mem_size, PROT_READ | PROT_WRITE,
 			MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1 , 0);
@@ -56,7 +97,7 @@ void vm_init(struct kvm *vm , size_t mem_size)
 
 	memreg.slot = 0;
 	memreg.flags = 0;
-	memreg.guest_phys_addr = 0x0;
+	memreg.guest_phys_addr = 0x00;
 	memreg.memory_size = mem_size;
 	memreg.userspace_addr = (unsigned long)vm->mem;
 	if (ioctl(vm->fd, KVM_SET_USER_MEMORY_REGION, &memreg) < 0) {
@@ -125,7 +166,6 @@ int run_vm(struct kvm *vm, struct vcpu *vcpu, size_t sz)
 					vcpu->kvm_run->io.direction,
 					vcpu->kvm_run->io.size,
 					vcpu->kvm_run->io.count);
-			//kvm_show_regs(vcpu);
 			if (!ret)
 				goto fail_exit;
 			break;
@@ -187,10 +227,15 @@ fail_exit:
 
 extern const unsigned char guest16_start[],guest16_end[];
 
+#define BOOT_LOADER_SELECTOR	0x1000
+#define BOOT_LOADER_IP		0x0000
+#define BOOT_LOADER_SP		0x8000
+
 int run_real_mode(struct kvm *vm, struct vcpu *vcpu)
 {
 	struct kvm_sregs sregs;
 	struct kvm_regs regs;
+	void *p;
 
 
 	if (ioctl(vcpu->fd, KVM_GET_SREGS, &sregs) < 0) {
@@ -198,7 +243,8 @@ int run_real_mode(struct kvm *vm, struct vcpu *vcpu)
 		exit(1);
 	}
 
-	sregs.cs.selector = 0x1000; 
+	sregs.cs.selector = vm->boot_selector; 
+
 	/*
 	 *KVM on Intel requires 'base' to be 'selector * 16' in real mode - by jeff
 	 */
@@ -211,26 +257,113 @@ int run_real_mode(struct kvm *vm, struct vcpu *vcpu)
 
 	memset(&regs, 0, sizeof(regs));
 	regs.rflags = 2; /*for kvm .must set*/
-	regs.rip = 0x200;    
+	regs.rip = vm->boot_ip;    
 	regs.rax = 0;    /*for ax + bx to verify the result(1)*/
 	regs.rbx = 1;
+	regs.rsp = vm->boot_sp;
+	regs.rbp = vm->boot_sp;
 
 	if (ioctl(vcpu->fd, KVM_SET_REGS, &regs) < 0) {
 		perror("KVM_SET_REGS");
 		exit(1);
 	}
-
-	memcpy(vm->mem + (0x1000 << 4) + 0x200, guest16_start, guest16_end-guest16_start);
 	return run_vm(vm, vcpu, 2);
 }
 
-int main(void)
+static int load_flat_binary(struct kvm *self, int fd)
+{
+	void *p;
+	int nr;
+
+	if (lseek(fd, 0, SEEK_SET) < 0) {
+		perror("lseek");
+		exit(1);
+	}
+
+	p = guest_real_to_host(self, BOOT_LOADER_SELECTOR, BOOT_LOADER_IP);
+
+	while ((nr = read(fd, p, 65536)) > 0)
+		p += nr;
+
+	self->boot_selector = BOOT_LOADER_SELECTOR;
+	self->boot_ip = BOOT_LOADER_IP;
+
+	return true;
+}
+
+static void load_test_flat_binary(struct kvm *self)
+{
+	void *p;
+
+	p = guest_real_to_host(self, BOOT_LOADER_SELECTOR, BOOT_LOADER_IP);
+	memcpy(p, guest16_start, guest16_end-guest16_start);
+	self->boot_selector = BOOT_LOADER_SELECTOR;
+	self->boot_ip = BOOT_LOADER_IP;
+	self->boot_sp = BOOT_LOADER_SP; 
+}
+
+bool kvm__load_kernel(struct kvm *kvm, const char *kernel_filename)
+{
+	bool ret;
+	int fd;
+
+	fd = open(kernel_filename, O_RDONLY);
+	if (fd < 0)
+		perror("unable to open kernel");
+
+	ret = load_flat_binary(kvm, fd);
+	if (ret)
+		goto found_kernel;
+
+	fprintf("%s is not a valid flat binary", kernel_filename);
+
+found_kernel:
+	return ret;
+}
+
+int main(int argc, char *argv[])
 {
 	struct kvm kvm;
+	const char *kernel_filename = NULL;
+	int i;
+
+	for (i = 1; i < argc; i++) {
+		if (!strncmp("--kernel=", argv[i], 9)) {
+			kernel_filename = &argv[i][9];
+			continue;
+		}else if (!strncmp("--kernel= ", argv[i], 10)) {
+			kernel_filename = &argv[i][10];
+			continue;
+		} else if (!strncmp("--test", argv[i], 6)) {
+			kernel_filename = "--test";
+			continue;
+		} else {
+			if (argv[i][0] != '-')
+				kernel_filename = argv[i];
+			else 
+				fprintf(stderr, "unknown option:%s\n", argv[i]);
+		}
+	}
+
+	if (!kernel_filename)
+		usage(argv);
 
 	vm_init(&kvm, 0x200000);
+
 	vcpu_init(&kvm, &kvm.vcpu);
+
 	early_printk__init();
+
+	printf("kernel_filename=%s\n", kernel_filename);
+	if (!strncmp(kernel_filename, "--test", 6)) {
+		printf("start to test flat binary\n");
+		load_test_flat_binary(&kvm);
+	}
+		
+	else
+		kvm__load_kernel(&kvm, kernel_filename);
+
+
 	run_real_mode(&kvm, &kvm.vcpu);
 
 	return 0;

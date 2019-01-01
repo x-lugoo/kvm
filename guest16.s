@@ -6,17 +6,10 @@ guest16:
     	add $'0', %al
     	out %al, (%dx)
 
-    	mov $'J', %al
-    	out %al, (%dx)
-
-    	mov $'e', %al
-    	out %al, (%dx)
-
-    	mov $'f', %al
-    	out %al, (%dx)
-
-    	mov $'f', %al
-    	out %al, (%dx)
+test_ok:
+	cs lea msg, %si
+	mov $(msg_end-msg), %cx
+	cs rep/outsb
 
 	in (%dx), %al   #input 'G'
     	out %al, (%dx)
@@ -28,3 +21,6 @@ guest16:
 	movw %ax, 0x1502
 	hlt
 
+msg:
+	.asciz "\nJeff is testing kvm\n"
+msg_end:

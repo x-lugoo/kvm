@@ -13,6 +13,9 @@ struct kvm {
 	struct vcpu vcpu;
 	int sys_fd;
 	int fd;
+	uint16_t	boot_selector;
+	uint16_t	boot_ip;
+	uint16_t 	boot_sp;
 	char *mem;
 };
 

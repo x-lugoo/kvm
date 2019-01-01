@@ -4,7 +4,7 @@
 #define TIMER_FREQ	1193182
 #define TIMER_DIV(x)	((TIMER_FREQ+(x)/2)/(x))
 
-#define TEST_COUNT	0x0200
+#define TEST_COUNT	0x10
 
 	.code16gcc
 	.text
@@ -58,6 +58,7 @@ set_pit:
 	movb	$(TIMER_DIV(1000) / 256), %al
 	outb	%al, %dx
 
+
 enable_irq0:
 	mov	$0xfe, %al
 	mov	$(IO_PIC+1), %dx
@@ -79,7 +80,7 @@ timer_isr:
 	pushaw
 	pushfw
 	mov	$0x3f8,%dx
-	mov	$0x2e, %al	# .
+	mov	$'*', %al
 	out	%al,%dx
 	decw	count
 	jz	test_ok
